@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-29",
+  "count": 2,
+  "scripts": [
+    {
+      "id": 2809,
+      "filename": "哈希玛特青龙.js",
+      "upload_time": "2026-10-29 09:41:09",
+      "api_hash": "6d8c96b20c0d1ac56296df0b816f2200231e0e97416618889769c3d25aeaacef",
+      "download_sha256": "8b38c682e908be9b2ff6c68d80ce5c1bd2a3a33811fa128157c4dee737089943",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 18171
+    },
+    {
+      "id": 2810,
+      "filename": "繁星世界(优化版+自动提现).py",
+      "upload_time": "2026-10-29 17:45:36",
+      "api_hash": "c54930098f5ad89fdc91a841347f3a87152498ca6a58e00c9da94fb825d90bca",
+      "download_sha256": "c54930098f5ad89fdc91a841347f3a87152498ca6a58e00c9da94fb825d90bca",
+      "verify": "full_match",
+      "bytes": 28623
+    }
+  ]
+}

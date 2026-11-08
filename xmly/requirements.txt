@@ -1,0 +1,4 @@
+# 本地签 ticket 需要（模拟 arm64 的 libnativelib.so）
+unicorn>=2.0
+capstone>=5.0
+pyelftools>=0.29

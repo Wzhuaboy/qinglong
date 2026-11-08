@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-05",
+  "count": 2,
+  "scripts": [
+    {
+      "id": 2819,
+      "filename": "xjhy.py",
+      "upload_time": "2026-11-05 15:10:46",
+      "api_hash": "c1f91a238af711cdefc7269bb1fd390d41c5ec221e75ad10edd2876fdc982272",
+      "download_sha256": "6b38d82181522f676dbed89e81fa537002394afe0065e8a184d3811d02f74f0a",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 115548
+    },
+    {
+      "id": 2820,
+      "filename": "qingke.js",
+      "upload_time": "2026-11-05 18:06:28",
+      "api_hash": "b8cb82d53205b49275dc44cdda3a000df3391250e507d52346a10418c6d25df8",
+      "download_sha256": "5a3ac3442651de9340d7635af9312f4112738430efff8ed6729fdb4bb5588955",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 16786
+    }
+  ]
+}

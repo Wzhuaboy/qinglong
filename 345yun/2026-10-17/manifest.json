@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-17",
+  "count": 8,
+  "scripts": [
+    {
+      "id": 2597,
+      "filename": "Al奇遇赢Pad.py",
+      "upload_time": "2026-10-17 01:53:34",
+      "api_hash": "6a6b51c0a5ca89ff4bee098a607ada995bae578e5bba0f4752480d023da104af",
+      "download_sha256": "3e81fc2990218b7677ccc9e6e8a82977ad21b46d2a0fc934cc9190f735d4cdc0",
+      "verify": "mismatch",
+      "bytes": 88603
+    },
+    {
+      "id": 2598,
+      "filename": "DOGE自动.py",
+      "upload_time": "2026-10-17 13:54:42",
+      "api_hash": "1387abd76870b8f1b9adcc033e90bca36376f3121bf4ee8e20d6efac8a853cb1",
+      "download_sha256": "a4b8d56ef482bb699fd17d70d24e60b42638f1588c788ce9f58b785daf1b5612",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 33720
+    },
+    {
+      "id": 2599,
+      "filename": "恰恰阅读_底保1.5快完整解密版.py",
+      "upload_time": "2026-10-17 14:27:31",
+      "api_hash": "714585094029a9a2e325bd32b430a8dbc1f2bb05dfa27283b1b5d65c49caa8ce",
+      "download_sha256": "82fb918c1ecd0b68418a32121f1d7abfd1fee69c16b94986f522b61e9552c86b",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 14365
+    },
+    {
+      "id": 2600,
+      "filename": "提现免费券.py",
+      "upload_time": "2026-10-17 14:47:51",
+      "api_hash": "1a7233df88e82e1818744a687b1b1bb4b79a6c0c4587f4fa2d3d563d6dbdf6f5",
+      "download_sha256": "1a7233df88e82e1818744a687b1b1bb4b79a6c0c4587f4fa2d3d563d6dbdf6f5",
+      "verify": "full_match",
+      "bytes": 11259
+    },
+    {
+      "id": 2602,
+      "filename": "恰恰续期.py",
+      "upload_time": "2026-10-17 14:56:28",
+      "api_hash": "f08430254e829b5c92889e3c18684e7aa7ae23c975b8ad673540dccd6268a11d",
+      "download_sha256": "1e19bd095c0f231eaada5340c3a6acd48fcf2bfd0b51281d8052d3cedae4e8d2",
+      "verify": "mismatch",
+      "bytes": 2853
+    },
+    {
+      "id": 2603,
+      "filename": "恰恰阅读.py",
+      "upload_time": "2026-10-17 14:56:32",
+      "api_hash": "29b497052732231a2cee7a5496d4fbde08e65bed1bf159aaf07c84230a3d61a1",
+      "download_sha256": "a7ce04ff5ceb61fc7384a0c303d299ef2f110164a028505e19d8ca730d9dc991",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 15224
+    },
+    {
+      "id": 2604,
+      "filename": "海角签到.py",
+      "upload_time": "2026-10-17 15:03:37",
+      "api_hash": "33b0f3736ecf86fb76e802888fdb295f60b189a62a361c082752e3d48077f28d",
+      "download_sha256": "a538ce61c8d622b56265de02adbf4411c63e8b4920be4c415b4fec7531591d94",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 6665
+    },
+    {
+      "id": 2605,
+      "filename": "微信阅读手动过检便捷版.py",
+      "upload_time": "2026-10-17 15:05:20",
+      "api_hash": "1a7445c6e7752fb4522fa4836f127eaae1f10336df49c2ddf9f5becc5908c552",
+      "download_sha256": "9816c370240407423b2dc62d656c79bb93f9bde1fc3cafac93f581cfbaea1ccd",
+      "verify": "strip_match_head11_tail12",
+      "bytes": 16088
+    }
+  ]
+}
