@@ -38,6 +38,142 @@ let wechat = new WeChatServer({
 }
 );
 
+// 通知用日志尾部：截获 console.log（Env 的 $.log 底层也是 console.log），只保留最近 100 行
+const _qlLogTail = [];
+const _qlOrigConsoleLog = console.log;
+console.log = (...args) => {
+    try {
+        _qlLogTail.push(args.map((a) => { try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); } }).join(' '));
+        if (_qlLogTail.length > 100) _qlLogTail.splice(0, _qlLogTail.length - 100);
+    } catch {}
+    _qlOrigConsoleLog(...args);
+};
+function _qlLog(m) { console.log(m); }
+
+async function qlNotifyKekoukele(results = [], note = '') {
+    const ok = results.filter((t) => t.result && t.result.startsWith('✅')).length;
+    const fail = results.length - ok;
+    const title = results.length ? '可口可乐小程序：' + ok + '成功/' + fail + '失败' : '可口可乐小程序：未执行';
+    const lines = ['可口可乐小程序签到', '', '总结：' + ok + ' 成功 / ' + fail + ' 失败'];
+    results.forEach((t, i) => {
+        lines.push('账号' + (i + 1) + ' ' + (t.result || '未知结果') + (t.points !== null && t.points !== undefined ? '（剩余' + t.points + '瓶）' : ''));
+    });
+    if (note) lines.push(note);
+    const tail = _qlLogTail.slice(-30);
+    if (tail.length) lines.push('', '📋 日志尾部（最近30行）:', ...tail);
+    let content = lines.join('\n');
+    if (content.length > 1800) content = content.slice(0, 1800) + '\n……（内容已截断，完整日志见青龙运行日志）';
+    if (await qlPanelNotify(title, content)) return;
+    const notifier = loadQinglongNotifier();
+    if (!notifier) { console.log('⚠️ 未找到可用的青龙sendNotify模块，账号汇总保留在运行日志'); return; }
+    try {
+        await notifier.sendNotify(title, content);
+        console.log('✅ 通知已提交青龙通知模块（sendNotify.js，仅环境变量渠道有效）');
+    } catch (e) { console.log('⚠️ 青龙通知调用失败: ' + (e.code || e.message || '通知模块异常')); }
+}
+
+// ---------------------------------------------------------------------------
+// 青龙通知（走面板通知设置，例如面板里配的企业微信）
+// 背景：sendNotify.js 只读 QYWX_AM 等环境变量，读不到面板数据库里的通知配置，
+// 所以只调它时面板里配的企业微信收不到。本函数优先调青龙面板本地接口
+// PUT /open/system/notify（带系统 token，见 /ql/data/config/token.json），
+// 该接口由面板后端按数据库里的通知配置发出去；失败时在日志里写明原因，
+// 再试 sendNotify.js（仅环境变量渠道有效）。通知发不发得出去绝不影响主流程。
+// 截断规则：正文先取执行汇总，再加日志尾部最多 30 行，总长截到约 1800 字符
+// （企业微信应用消息有长度限制，完整日志会被截断或发失败）。
+// ---------------------------------------------------------------------------
+function qlPanelToken(forceRegen) {
+    const fsMod = require('fs');
+    if (!forceRegen) {
+        const candidates = [process.env.QL_NOTIFY_TOKEN_FILE || '', '/ql/data/config/token.json', '/ql/config/token.json'];
+        for (const p of candidates) {
+            if (!p) continue;
+            try {
+                const data = JSON.parse(fsMod.readFileSync(p, 'utf8'));
+                if (data.value && data.expiration * 1000 > Date.now() + 30000) return data.value;
+            } catch {}
+        }
+    }
+    for (const cmd of [['node', '/ql/static/build/token.js'], ['node', '/ql/build/token.js']]) {
+        try {
+            const r = require('child_process').spawnSync(cmd[0], cmd.slice(1), { encoding: 'utf8', timeout: 30000 });
+            if (r.status === 0 && r.stdout) {
+                const parts = r.stdout.trim().split(/\s+/);
+                if (parts.length) return parts[parts.length - 1];
+            }
+        } catch {}
+    }
+    return '';
+}
+
+async function qlPanelNotify(title, content) {
+    const httpMod = require('http');
+    const port = (process.env.QL_NOTIFY_PORT || process.env.QlPort || '5700').trim() || '5700';
+    let token = qlPanelToken(false);
+    if (!token) {
+        _qlLog('⚠️ [通知] 面板接口发送失败：读不到青龙系统 token（/ql/data/config/token.json 不存在/已过期，且 node token.js 重新生成失败），尝试 sendNotify.js');
+        return false;
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await new Promise((resolve) => {
+            const body = JSON.stringify({ title, content });
+            const req = httpMod.request({
+                host: '127.0.0.1', port: Number(port),
+                path: '/open/system/notify?t=' + Math.floor(Date.now() / 1000),
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json;charset=UTF-8', 'Content-Length': Buffer.byteLength(body) },
+                timeout: 15000,
+            }, (res) => {
+                let raw = '';
+                res.on('data', (c) => { raw += c; });
+                res.on('end', () => {
+                    try {
+                        const data = JSON.parse(raw);
+                        resolve(data.code === 200 ? true : { code: data.code, message: data.message || '' });
+                    } catch { resolve({ code: res.statusCode, message: '非 JSON 响应' }); }
+                });
+            });
+            req.on('timeout', () => { req.destroy(new Error('请求超时')); });
+            req.on('error', (e) => { resolve({ code: 0, message: e.message }); });
+            req.write(body);
+            req.end();
+        });
+        if (result === true) {
+            _qlLog('📨 青龙通知已发（面板通知设置）');
+            return true;
+        }
+        if (result && result.code === 401 && attempt === 0) {
+            token = qlPanelToken(true);
+            if (!token) {
+                _qlLog('⚠️ [通知] 面板接口返回 401 且重新生成 token 失败，尝试 sendNotify.js');
+                return false;
+            }
+            continue;
+        }
+        _qlLog('⚠️ [通知] 面板接口发送失败：' + (result ? 'code=' + result.code + '：' + (result.message || '') : '未知错误') + '，尝试 sendNotify.js');
+        return false;
+    }
+    return false;
+}
+
+function loadQinglongNotifier() {
+    // 仅影响本脚本进程，避免青龙通知模块追加随机句子。
+    process.env.HITOKOTO = 'false';
+    const pathMod = require('path');
+    const candidates = [
+        '/ql/data/scripts/sendNotify.js', '/ql/data/deps/sendNotify.js', '/ql/scripts/sendNotify.js',
+        pathMod.join(__dirname, 'sendNotify.js'), pathMod.join(__dirname, '..', 'sendNotify.js'),
+        pathMod.join(__dirname, '..', '..', 'sendNotify.js'), 'sendNotify',
+    ];
+    for (const filename of candidates) {
+        try {
+            const notifier = require(filename);
+            if (typeof notifier?.sendNotify === 'function') return notifier;
+        } catch {}
+    }
+    return null;
+}
+
 class Task {
     constructor(env) {
         this.index = $.userIdx++
@@ -45,6 +181,9 @@ class Task {
         this.token = null
         this.wcsid = this.user[0]
         this.isSign = false
+        this.result = '未开始'
+        this.signPoint = null
+        this.points = null
     }
 
     async run() {
@@ -55,6 +194,7 @@ class Task {
             await this.getUserToken(codeRes.data.code)
         }
         if (!this.token) {
+            this.result = '❌ 获取用户Token失败';
             $.log(`账号[${this.index}] 获取用户Token失败❌`)
             return
         }
@@ -110,12 +250,16 @@ class Task {
         try {
             let { data: res } = await axios.request(options);
             if (res.success == true) {
+                this.result = `✅ 签到成功 +${res.point}快乐瓶`;
+                this.signPoint = res.point;
                 $.log(`签到成功 获得【${res.point}】快乐瓶`)
             } else {
+                this.result = '❌ 签到失败';
                 $.log(`签到失败`)
                 console.log(res);
             }
         } catch (e) {
+            this.result = '❌ 签到异常';
             console.log(e);
 
         }
@@ -140,6 +284,7 @@ class Task {
         }
         try {
             let { data: res } = await axios.request(options);
+            this.points = res.point;
             $.log(`目前还剩【${res.point}】瓶 `)
 
         } catch (e) {
@@ -161,17 +306,22 @@ class Task {
     await getNotice()
     $.checkEnv(ckName);
     if (process.env['wx_server_url'] && process.env['wx_auth']) {
+        const results = [];
         for (let user of $.userList) {
-            await new Task(user).run();
+            const t = new Task(user);
+            await t.run();
+            results.push(t);
         }
+        await qlNotifyKekoukele(results);
     } else {
         
         $.log(`${ckName}未配置微信SERVER配置 搭建可看仓库目录下的readme.md❌`)
+        await qlNotifyKekoukele([], '未配置微信SERVER（wx_server_url / wx_auth），需自建 WeChatCodeServer');
         return
     }
 
 })()
-    .catch((e) => console.log(e))
+    .catch(async (e) => { console.log(e); await qlNotifyKekoukele([], '脚本异常：' + (e && e.message ? e.message : e)); })
     .finally(() => $.done());
 
 async function getNotice() {

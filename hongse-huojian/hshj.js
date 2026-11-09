@@ -196,7 +196,93 @@ const CACHE_DIR = pathMod.join(__dirname, '.cache');
 const ACCOUNT_CACHE_FILE = pathMod.join(CACHE_DIR, 'hsjj_accounts.json');
 
 // ==================== 青龙通知：正文仅包含账号汇总 ====================
-function log(str) { console.log(str); }
+const _qlLogTail = [];
+function log(str) { try { _qlLogTail.push(str); if (_qlLogTail.length > 100) _qlLogTail.splice(0, _qlLogTail.length - 100); } catch {} console.log(str); }
+
+// ---------------------------------------------------------------------------
+// 青龙通知（走面板通知设置，例如面板里配的企业微信）
+// 背景：sendNotify.js 只读 QYWX_AM 等环境变量，读不到面板数据库里的通知配置，
+// 所以只调它时面板里配的企业微信收不到。本函数优先调青龙面板本地接口
+// PUT /open/system/notify（带系统 token，见 /ql/data/config/token.json），
+// 该接口由面板后端按数据库里的通知配置发出去；失败时在日志里写明原因，
+// 再试 sendNotify.js（仅环境变量渠道有效）。通知发不发得出去绝不影响主流程。
+// 截断规则：正文先取执行汇总，再加日志尾部最多 30 行，总长截到约 1800 字符
+// （企业微信应用消息有长度限制，完整日志会被截断或发失败）。
+// ---------------------------------------------------------------------------
+function qlPanelToken(forceRegen) {
+    const fsMod = require('fs');
+    if (!forceRegen) {
+        const candidates = [process.env.QL_NOTIFY_TOKEN_FILE || '', '/ql/data/config/token.json', '/ql/config/token.json'];
+        for (const p of candidates) {
+            if (!p) continue;
+            try {
+                const data = JSON.parse(fsMod.readFileSync(p, 'utf8'));
+                if (data.value && data.expiration * 1000 > Date.now() + 30000) return data.value;
+            } catch {}
+        }
+    }
+    for (const cmd of [['node', '/ql/static/build/token.js'], ['node', '/ql/build/token.js']]) {
+        try {
+            const r = require('child_process').spawnSync(cmd[0], cmd.slice(1), { encoding: 'utf8', timeout: 30000 });
+            if (r.status === 0 && r.stdout) {
+                const parts = r.stdout.trim().split(/\s+/);
+                if (parts.length) return parts[parts.length - 1];
+            }
+        } catch {}
+    }
+    return '';
+}
+
+async function qlPanelNotify(title, content) {
+    const httpMod = require('http');
+    const port = (process.env.QL_NOTIFY_PORT || process.env.QlPort || '5700').trim() || '5700';
+    let token = qlPanelToken(false);
+    if (!token) {
+        log('⚠️ [通知] 面板接口发送失败：读不到青龙系统 token（/ql/data/config/token.json 不存在/已过期，且 node token.js 重新生成失败），尝试 sendNotify.js');
+        return false;
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await new Promise((resolve) => {
+            const body = JSON.stringify({ title, content });
+            const req = httpMod.request({
+                host: '127.0.0.1', port: Number(port),
+                path: '/open/system/notify?t=' + Math.floor(Date.now() / 1000),
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json;charset=UTF-8', 'Content-Length': Buffer.byteLength(body) },
+                timeout: 15000,
+            }, (res) => {
+                let raw = '';
+                res.on('data', (c) => { raw += c; });
+                res.on('end', () => {
+                    try {
+                        const data = JSON.parse(raw);
+                        resolve(data.code === 200 ? true : { code: data.code, message: data.message || '' });
+                    } catch { resolve({ code: res.statusCode, message: '非 JSON 响应' }); }
+                });
+            });
+            req.on('timeout', () => { req.destroy(new Error('请求超时')); });
+            req.on('error', (e) => { resolve({ code: 0, message: e.message }); });
+            req.write(body);
+            req.end();
+        });
+        if (result === true) {
+            log('📨 青龙通知已发（面板通知设置）');
+            return true;
+        }
+        if (result && result.code === 401 && attempt === 0) {
+            token = qlPanelToken(true);
+            if (!token) {
+                log('⚠️ [通知] 面板接口返回 401 且重新生成 token 失败，尝试 sendNotify.js');
+                return false;
+            }
+            continue;
+        }
+        log('⚠️ [通知] 面板接口发送失败：' + (result ? 'code=' + result.code + '：' + (result.message || '') : '未知错误') + '，尝试 sendNotify.js');
+        return false;
+    }
+    return false;
+}
+
 
 function loadQinglongNotifier() {
     // 仅影响本脚本进程，避免青龙通知模块追加随机句子。
@@ -228,18 +314,28 @@ function formatAccountSummary(account) {
         + (account.ok === false ? '（' + (account.taskIssues?.length ? account.taskIssues.join('；') : '部分任务未完成') + '）' : '');
 }
 
-async function push_notification(summaryLines = []) {
+async function push_notification(summaryLines = [], successCount = 0, totalCount = 0, note = '') {
     if (process.env.HSJJ_NOTIFY === '0') return;
-    if (!summaryLines.length) { log('ℹ️ 没有账号汇总，跳过通知'); return; }
+    if (!summaryLines.length && !note) { log('ℹ️ 没有账号汇总，跳过通知'); return; }
+    const failedCount = Math.max(totalCount - successCount, 0);
+    const title = totalCount > 0
+        ? '红色火箭：' + successCount + '成功/' + failedCount + '失败'
+        : '红色火箭：未执行';
+    const lines = ['📋 账号汇总:'];
+    if (summaryLines.length) lines.push(...summaryLines);
+    if (note) lines.push(note);
+    const tail = _qlLogTail.slice(-30);
+    if (tail.length) lines.push('', '📋 日志尾部（最近30行）:', ...tail);
+    let content = lines.join('\n');
+    if (content.length > 1800) content = content.slice(0, 1800) + '\n……（内容已截断，完整日志见青龙运行日志）';
+    if (await qlPanelNotify(title, content)) return;
     const notifier = loadQinglongNotifier();
     if (!notifier) { log('⚠️ 未找到可用的青龙sendNotify模块，账号汇总保留在运行日志'); return; }
-    const title = '红色火箭（华泰基金）';
-    const content = ['📋 账号汇总:', ...summaryLines].join('\n');
     try {
         await notifier.sendNotify(title, content);
-        log('✅ 账号汇总已提交青龙通知模块');
+        log('✅ 账号汇总已提交青龙通知模块（sendNotify.js，仅环境变量渠道有效）');
     } catch (error) {
-        log('⚠️ 青龙通知调用失败: ' + (error.code || '通知模块异常'));
+        log('⚠️ 青龙通知调用失败: ' + (error.code || error.message || '通知模块异常'));
     }
 }
 
@@ -1649,7 +1745,7 @@ async function main() {
 
     if (!taskVar.trim()) {
         log('请配置自己的 YYB_SERVER（YYB地址@账号ref，多账号换行），账号须先在 YYB 中授权。');
-        await push_notification();
+        await push_notification([], 0, 0, '未配置 YYB_SERVER（YYB地址@账号ref，多账号换行），账号须先在 YYB 中授权。');
         process.exit(0);
     }
 
@@ -1704,7 +1800,7 @@ async function main() {
     log('\n📋 账号汇总:');
     const summaryLines = accounts.map(formatAccountSummary);
     for (const line of summaryLines) log(line);
-    await push_notification(summaryLines);
+    await push_notification(summaryLines, successCount, accounts.length);
 }
 
 async function runCli() {

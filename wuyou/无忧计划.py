@@ -365,6 +365,195 @@ def request_with_proxy(
     return session.request(method, url, **kwargs)
 
 
+# ---------------------------------------------------------------------------
+# 青龙通知（走面板通知设置，例如面板里配的企业微信）
+# 背景：notify.py 只读 QYWX_AM 等环境变量，读不到面板数据库里的通知配置，
+# 所以只调它时面板里配的企业微信收不到。本函数优先调青龙面板本地接口
+# PUT /open/system/notify（带系统 token，见 /ql/data/config/token.json），
+# 该接口由面板后端按数据库里的通知配置发出去；失败时在日志里写明原因，
+# 再试 notify.py（仅环境变量渠道有效）。通知发不发得出去绝不影响主流程。
+# 截断规则：正文先取执行汇总，再加日志尾部最多 30 行，总长截到约 1800 字符
+# （企业微信应用消息有长度限制，完整日志会被截断或发失败）。
+# ---------------------------------------------------------------------------
+import subprocess as _ql_subprocess
+import urllib.error as _ql_urlerror
+import urllib.request as _ql_urlrequest
+
+_QL_NOTIFY_MAX_LEN = 1800
+_QL_NOTIFY_TAIL_LINES = 30
+
+
+def _ql_truncate(text, limit=_QL_NOTIFY_MAX_LEN):
+    text = (text or "").strip()
+    if len(text) > limit:
+        return text[:limit] + "\n……（内容已截断，完整日志见青龙运行日志）"
+    return text
+
+
+class _QlLogTee:
+    """把 print 输出同时写进内存缓冲，供通知取日志尾部；屏幕输出不受影响。"""
+
+    def __init__(self, stream):
+        import io as _io
+        import threading as _th
+        self.stream = stream
+        self.buf = _io.StringIO()
+        self.lock = _th.Lock()
+
+    def write(self, s):
+        with self.lock:
+            try:
+                self.stream.write(s)
+            except Exception:
+                pass
+            try:
+                self.buf.write(s)
+            except Exception:
+                pass
+        return len(s)
+
+    def flush(self):
+        with self.lock:
+            try:
+                self.stream.flush()
+            except Exception:
+                pass
+
+    def tail(self, lines=_QL_NOTIFY_TAIL_LINES):
+        return "\n".join(self.buf.getvalue().splitlines()[-lines:])
+
+
+def _ql_panel_token(force_regen=False):
+    """读青龙系统 token：先读缓存文件，过期/缺失时用面板自带的 token.js 重新生成。"""
+    import json as _json
+    import time as _time
+    if not force_regen:
+        for _path in (
+            os.environ.get("QL_NOTIFY_TOKEN_FILE", "") or "",
+            "/ql/data/config/token.json",
+            "/ql/config/token.json",
+        ):
+            if not _path:
+                continue
+            try:
+                with open(_path, encoding="utf-8") as _f:
+                    _data = _json.load(_f)
+                _tok = str(_data.get("value") or "").strip()
+                _exp = int(_data.get("expiration") or 0)
+                if _tok and _exp > _time.time() + 30:
+                    return _tok
+            except Exception:
+                continue
+    for _cmd in (["node", "/ql/static/build/token.js"], ["node", "/ql/build/token.js"]):
+        try:
+            _r = _ql_subprocess.run(_cmd, capture_output=True, text=True, timeout=30)
+            if _r.returncode == 0:
+                _parts = (_r.stdout or "").strip().split()
+                if _parts:
+                    return _parts[-1]
+        except Exception:
+            continue
+    return ""
+
+
+def _ql_panel_notify(title, content):
+    """调面板接口发通知。返回 (True, '') 或 (False, 原因)。"""
+    import json as _json
+    import time as _time
+    port = (os.environ.get("QL_NOTIFY_PORT", "") or os.environ.get("QlPort", "") or "5700").strip() or "5700"
+    token = _ql_panel_token()
+    if not token:
+        return False, "读不到青龙系统 token（/ql/data/config/token.json 不存在/已过期，且 node token.js 重新生成失败）"
+    body = _json.dumps({"title": title, "content": content}, ensure_ascii=False).encode("utf-8")
+    for attempt in range(2):
+        try:
+            req = _ql_urlrequest.Request(
+                "http://127.0.0.1:%s/open/system/notify?t=%d" % (port, int(_time.time())),
+                data=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json;charset=UTF-8"},
+                method="PUT",
+            )
+            with _ql_urlrequest.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
+            if data.get("code") == 200:
+                return True, ""
+            if data.get("code") == 401 and attempt == 0:
+                token = _ql_panel_token(force_regen=True)
+                if not token:
+                    return False, "面板接口返回 401 且重新生成 token 失败"
+                continue
+            return False, "面板通知接口返回 code=%s：%s" % (data.get("code"), str(data.get("message") or "")[:120])
+        except _ql_urlerror.HTTPError as exc:
+            if exc.code == 401 and attempt == 0:
+                token = _ql_panel_token(force_regen=True)
+                if not token:
+                    return False, "面板接口返回 HTTP 401 且重新生成 token 失败"
+                continue
+            return False, "面板通知接口 HTTP %s" % exc.code
+        except Exception as exc:
+            return False, "连接青龙面板接口失败：%s" % exc
+    return False, "面板通知接口调用失败"
+
+
+def _ql_load_notify_py():
+    """加载 notify.py（同目录 → /ql/data/scripts → /ql/scripts），找不到返回 None。"""
+    import importlib.util as _ilu
+    from pathlib import Path as _Path
+    here = _Path(__file__).resolve().parent
+    for _path in (here / "notify.py", _Path("/ql/data/scripts/notify.py"), _Path("/ql/scripts/notify.py")):
+        if not _path.exists():
+            continue
+        try:
+            spec = _ilu.spec_from_file_location("ql_notify_fallback", _path)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "send"):
+                return mod
+        except Exception:
+            continue
+    return None
+
+
+def _ql_notify(title, content):
+    """发青龙通知：优先走面板接口（面板通知设置/企业微信），失败再试 notify.py。绝不抛异常。"""
+    content = _ql_truncate(content)
+    try:
+        ok, reason = _ql_panel_notify(title, content)
+    except Exception as exc:
+        ok, reason = False, "面板通知调用异常：%s" % exc
+    if ok:
+        print("📨 青龙通知已发（面板通知设置）")
+        return True
+    print("⚠️ [通知] 面板接口发送失败：%s，尝试 notify.py" % reason)
+    sender = _ql_load_notify_py()
+    if sender is None:
+        print("⚠️ [通知] 未找到 notify.py，通知未发出")
+        return False
+    try:
+        sender.send(title, content)
+        print("📨 通知已通过 notify.py 发送（仅环境变量配置的渠道有效，未配则静默不发）")
+        return True
+    except Exception as exc:
+        print("⚠️ [通知] notify.py 发送失败：%s" % exc)
+        return False
+
+
+def _ql_wuyou_summary(results):
+    """通知用精简汇总：每账号一行关键结果，失败只取原因首行（不贴整段 traceback）。"""
+    lines = []
+    for idx, res in enumerate(results, 1):
+        icon = "✅" if res["success"] else "❌"
+        err = ""
+        if not res["success"]:
+            first = (str(res.get("error") or "").strip().splitlines() or [""])[0][:120]
+            err = "｜原因：" + first if first else ""
+        lines.append(
+            "%s 账号%d %s：登录%s｜签到%s｜任务%s｜广告%s｜金币%s%s"
+            % (icon, idx, res["account"], res["loginMsg"], res["signMsg"], res["taskMsg"], res["adMsg"], res["coins"], err)
+        )
+    return "\n".join(lines)
+
+
 def send_pushplus(title: str, content: str) -> None:
     if not PLUSPLUS_TOKEN:
         print("⚠️ [PushPlus] 未配置 PLUSPLUS_TOKEN，跳过推送")
@@ -1061,12 +1250,16 @@ def build_notify(results: List[Dict[str, Any]]) -> str:
 
 
 def main() -> None:
+    tee = _QlLogTee(sys.stdout)
+    sys.stdout = tee
     accounts = parse_accounts()
     log_title(len(accounts))
 
     if not accounts:
         print("❌ [配置] 未配置账号，请在环境变量 WY_ACCOUNT 中设置，格式: 账号#密码#device_id#备注 (多账号用换行分隔)")
         print("   示例: WY_ACCOUNT=13800138000#abc123#dev001#主号")
+        sys.stdout = tee.stream
+        _ql_notify("无忧计划：0成功/0失败", "❌ 未配置账号，请在环境变量 WY_ACCOUNT 中设置，格式：账号#密码#device_id#备注（多账号用换行分隔）")
         return
 
     user_agents = get_user_agents()
@@ -1113,6 +1306,12 @@ def main() -> None:
     print("╚" + "═" * 50 + "╝")
 
     send_pushplus(f"♻️ {APP_NAME}任务完成", build_notify(results))
+    sys.stdout = tee.stream
+    _summary = "无忧计划任务结果\n\n总结：%d 成功 / %d 失败\n%s" % (success_count, fail_count, _ql_wuyou_summary(results))
+    _tail = tee.tail()
+    if _tail:
+        _summary += "\n\n📋 日志尾部（最近30行）:\n" + _tail
+    _ql_notify("无忧计划：%d成功/%d失败" % (success_count, fail_count), _summary)
 
 
 if __name__ == "__main__":
