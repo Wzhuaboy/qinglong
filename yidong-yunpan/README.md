@@ -8,3 +8,4 @@
 - 环境变量：`YDYP_ACCOUNTS`（多账号：每行一个，格式 `手机号|Basic token`）；或单账号 `YDYP_PHONE` + `YDYP_AUTH`；可选 `YDYP_TRY_ALL`、通知 `PUSHPLUS_TOKEN`、`SENDKEY`
 - 配置方法：网页版移动云盘抓包，取请求头里的 `Authorization` Basic token，填进青龙环境变量。不要把 token 写进仓库。
 - 青龙任务命令：`task yidong-yunpan/139_yunduo.py`
+- 已补 `notify.py`（上游同款），缺通知模块问题已修。

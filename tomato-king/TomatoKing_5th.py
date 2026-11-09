@@ -11,7 +11,12 @@ import random
 import time
 
 import requests
-from notify import send
+
+try:
+    from notify import send
+except ImportError:
+    def send(title, content=""):
+        print(f"{title}\n{content}")
 
 try:
     from cryptography.hazmat.primitives import hashes, serialization
