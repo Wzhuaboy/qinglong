@@ -23,7 +23,7 @@ WeChatCodeServer 填写wx_server_url wx_auth 用于获取code
 
 const {
     Env
-} = require("../tools/env")
+} = require("./tools/env")
 const $ = new Env("可口可乐小程序");
 const WeChatServer = require("./wcs.js");
 let ckName = `kekoukele`;
