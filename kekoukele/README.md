@@ -3,11 +3,18 @@
 - 脚本：`kekoukele.js`（可口可乐微信小程序签到得积分）
 - 来源：`https://github.com/chizinini43-commits/QLqiandao`，原文件 `wxapp/kekoukele.js`
 - 文件最后提交：2026-05-14，提交 `19322d4e9f4b0cad29e36302e0f47f18a855d05c`
-- 语言：JavaScript
+- 语言：JavaScript；依赖 `axios`（青龙自带）
 - 定时：`30 9 * * 1`（脚本头，每周一 09:30）
-- 环境变量：`kekoukele`（账号，多账号按青龙常用换行分隔；单个账号内以 `#` 分隔字段，首位为 `wcsid`）；另需 `wx_server_url` + `wx_auth`（WeChatCodeServer 取码服务的地址与密钥）
-- 配置方法：先搭好或找好 WeChatCodeServer 取码服务，把 `wx_server_url`、`wx_auth` 和 `kekoukele` 填进青龙环境变量。不要把密钥和账号写进仓库。
+- 环境变量：`kekoukele`（账号，多账号按青龙常用换行分隔；单个账号内以 `#` 分隔字段，首位为 `wcsid`）
+- 取码（二选一，YYB 优先）：
+  - **优先走 yyb-go**：填 `YYB_SERVER` 即可（格式“地址@账号ref”，多行多账号，取第一行；与习酒、红色火箭、众安、顺丰速运共用同一个，已配好的不用重填）。`wcs.js` 的 `getCode` 会 POST `{server}/wxapp/getCode`，请求体 `{ref, app_id}`，`app_id` 为可口可乐小程序的 `wxa5811e0426a94686`；成功响应形如 `{"code":0,"msg":"success","data":{"openid":"...","result":{"code":"<微信code>","errMsg":"login:ok"}}}`（协议照抄 `hongse-huojian/hshj.js` 的 `yybPost` 与 `shunfeng-suyun/sfsy.py` 的 `_get_wx_code`）。YYB 的 ref 取自 `YYB_SERVER` 第一行的 `@` 后面，不是 `kekoukele` 里的 `wcsid`；多 YYB 账号时统一用第一行。取码失败时该账号记为失败并继续下一个，不抛错中断。`YYB_SERVER` 已配时不再走 WeChatCodeServer。
+  - **回落走 WeChatCodeServer**：没配 `YYB_SERVER` 时才走，需另填 `wx_server_url` + `wx_auth`（自建或有授权的取码服务地址与密钥）。不要把密钥和账号写进仓库。
+- 取码后的流程（未改）：拿到 code 后调 `https://member-api.icoke.cn/api/sp-portal/store/icoke/wechat/loginNoCache/<code>` 换 `jwtString` 当 token，再调签到接口，成功得快乐瓶。code 必须是真实有效的微信 code，假 code 会被 icoke 拒绝（回 `从微信获取openId失败`），所以补文件、通取码链路不等于能跑通签到。
+- 依赖文件（已补齐）：
+  - `tools/env.js`：上游同仓库 `tools/env.js` 原样复制，7106 字节，最后提交 2026-04-07。放在仓库根目录的 `tools/` 下，是因为 `kekoukele.js` 里写的是 `require("../tools/env")`（从 `kekoukele/` 往上一级找 `tools/`），不动 require 路径。全文已读过：通用 Env 工具类，无硬编码 token/密钥/手机号，无混淆串、无可疑网络请求。
+  - `kekoukele/wcs.js`：上游同仓库 `wxapp/wcs.js` 原样复制后加 YYB 适配，1839 字节（改前），最后提交 2026-05-14（提交 `6b188fa`）。放在 `kekoukele/` 下，是因为 `kekoukele.js` 里写的是 `require("./wcs.js")`。原文件内容干净，只是一个 POST 取码的小类（`/wx/code`、`/wx/call/init`、`/wx/cloud/call`），无硬编码密钥，`auth`/`url` 都来自传入的配置；YYB 适配只改了 `getCode` 的分发，`cloudInit`/`cloudCall` 与原来的 WeChatCodeServer 路径原样保留。
+  - 注意：`tools/env.js` 的 `sendMsg` 会 `require("./sendNotify.js")`（即 `tools/sendNotify.js`，未入仓），找不到时只打一行“发送通知失败”日志，不影响主流程退出；真正的跑完通知走的是 `kekoukele.js` 里的面板接口通知（见下）。
 - 青龙任务命令：`task kekoukele/kekoukele.js`
-- 通知：跑完（成功和失败都发）会发青龙通知，标题格式为“可口可乐小程序：X成功/Y失败”，正文为执行汇总（每账号签到结果、剩余快乐瓶）+ 日志尾部最多 30 行，总长截到约 1800 字符（企业微信应用消息有长度限制，完整日志见青龙运行日志）。未配微信 SERVER 时标题为“可口可乐小程序：未执行”。
-- 注意：本脚本 require `../tools/env` 与 `./wcs.js`，这两个文件未随库入仓，在青龙上直接跑会报找不到模块，需另外补齐（本次只加了通知逻辑，未改这一依赖）。
+- 通知：跑完（成功和失败都发）会发青龙通知，标题格式为“可口可乐小程序：X成功/Y失败”，正文为执行汇总（每账号签到结果、剩余快乐瓶）+ 日志尾部最多 30 行，总长截到约 1800 字符（企业微信应用消息有长度限制，完整日志见青龙运行日志）。未配任何取码服务（既无 `YYB_SERVER` 也无 `wx_server_url`/`wx_auth`）时标题为“可口可乐小程序：未执行”。
 - 通知通道：优先调青龙面板本地接口 PUT /open/system/notify（带系统 token），走面板“系统设置/通知设置”里配好的渠道（如企业微信）。以前只调 notify.py / sendNotify.js 时收不到，是因为它们只读 QYWX_AM 等环境变量，读不到面板数据库里的配置；`ql notify` 这个子命令在青龙 2.24.0 上不存在。面板接口失败时会在日志里写明原因，再试 notify.py / sendNotify.js（仅环境变量渠道有效）。
+- 验证（2026-11-09，假服务 stub，未用真实账号/code）：①只配 `YYB_SERVER` 指向假 yyb-go：假服务收到 POST `/wxapp/getCode`（`{ref, app_id}` 正确），脚本拿到假 code 后去 icoke 换 token，被 icoke 以 400“从微信获取openId失败”拒绝（假 code 的预期结果），证明取码链路通了、不是模块找不到也不是“未配置”；②只配 `wx_server_url`/`wx_auth` 指向假 WeChatCodeServer：收到 POST `/wx/code`（带 `auth` 头），同样走到换 token 那步，旧路没被改坏；③什么都不配：正常走“未配置微信SERVER配置”分支退出，无模块找不到报错。三个 JS 文件均过 `node --check`。

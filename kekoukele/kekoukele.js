@@ -305,7 +305,8 @@ class Task {
 !(async () => {
     await getNotice()
     $.checkEnv(ckName);
-    if (process.env['wx_server_url'] && process.env['wx_auth']) {
+    // 取码二选一：配了 YYB_SERVER 就走 yyb-go（wcs.js 里优先），否则走 WeChatCodeServer（wx_server_url + wx_auth）
+    if ((process.env['wx_server_url'] && process.env['wx_auth']) || String(process.env['YYB_SERVER'] || '').trim()) {
         const results = [];
         for (let user of $.userList) {
             const t = new Task(user);
@@ -316,7 +317,7 @@ class Task {
     } else {
         
         $.log(`${ckName}未配置微信SERVER配置 搭建可看仓库目录下的readme.md❌`)
-        await qlNotifyKekoukele([], '未配置微信SERVER（wx_server_url / wx_auth），需自建 WeChatCodeServer');
+        await qlNotifyKekoukele([], '未配置微信SERVER（YYB_SERVER 或 wx_server_url / wx_auth），配 YYB_SERVER 走 yyb-go 取码，或自建 WeChatCodeServer');
         return
     }
 
