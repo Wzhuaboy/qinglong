@@ -9,7 +9,6 @@
 // 您在使用脚本库下载的脚本时自行检查判断风险。
 // 所涉及到的 账号安全、数据泄露、设备故障、软件违规封禁、财产损失等问题及法律风险，与脚本库无关！均由开发者、上传者、使用者自行承担。
 
-#!/usr/bin/env node
 // cron: 40 8,12,18 * * *
 // 手机号注册，下载APP，登录后，先实名认证（姓名，身份证号），然后填入环境变量运行脚本
 
@@ -44,6 +43,150 @@ function log(msg) {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   console.log(`[${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}] ${msg}`);
+}
+
+// ---------------------------------------------------------------------------
+// 青龙通知（2026-11-09 入库时加，与 kekoukele 等脚本同款做法；主流程未动）
+// 主通道：青龙面板本地接口 PUT /open/system/notify（带系统 token），
+// 由面板后端按数据库里的通知配置发出去（例如面板里配的企业微信）。
+// sendNotify.js 只读 QYWX_AM 等环境变量，读不到面板通知配置，所以只调
+// 它时面板里配的企业微信收不到。失败时在日志里写明原因，再试
+// sendNotify.js（仅环境变量渠道有效）。通知发不出去绝不影响主流程。
+// 截断规则：正文先取执行汇总，再加日志尾部最多 30 行，总长截到约 1800 字符
+// （企业微信应用消息有长度限制，完整日志会被截断或发失败）。
+// ---------------------------------------------------------------------------
+
+// 通知用日志尾部：截获 console.log（本脚本的 log() 底层也是 console.log），只保留最近 100 行
+const _qlLogTail = [];
+const _qlOrigConsoleLog = console.log;
+console.log = (...args) => {
+  try {
+    _qlLogTail.push(args.map((a) => { try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); } }).join(' '));
+    if (_qlLogTail.length > 100) _qlLogTail.splice(0, _qlLogTail.length - 100);
+  } catch {}
+  _qlOrigConsoleLog(...args);
+};
+function _qlLog(m) { console.log(m); }
+
+function qlPanelToken(forceRegen) {
+  const fsMod = require('fs');
+  if (!forceRegen) {
+    const candidates = [process.env.QL_NOTIFY_TOKEN_FILE || '', '/ql/data/config/token.json', '/ql/config/token.json'];
+    for (const p of candidates) {
+      if (!p) continue;
+      try {
+        const data = JSON.parse(fsMod.readFileSync(p, 'utf8'));
+        if (data.value && data.expiration * 1000 > Date.now() + 30000) return data.value;
+      } catch {}
+    }
+  }
+  for (const cmd of [['node', '/ql/static/build/token.js'], ['node', '/ql/build/token.js']]) {
+    try {
+      const r = require('child_process').spawnSync(cmd[0], cmd.slice(1), { encoding: 'utf8', timeout: 30000 });
+      if (r.status === 0 && r.stdout) {
+        const parts = r.stdout.trim().split(/\s+/);
+        if (parts.length) return parts[parts.length - 1];
+      }
+    } catch {}
+  }
+  return '';
+}
+
+async function qlPanelNotify(title, content) {
+  const httpMod = require('http');
+  const port = (process.env.QL_NOTIFY_PORT || process.env.QlPort || '5700').trim() || '5700';
+  let token = qlPanelToken(false);
+  if (!token) {
+    _qlLog('⚠️ [通知] 面板接口发送失败：读不到青龙系统 token（/ql/data/config/token.json 不存在/已过期，且 node token.js 重新生成失败），尝试 sendNotify.js');
+    return false;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await new Promise((resolve) => {
+      const body = JSON.stringify({ title, content });
+      const req = httpMod.request({
+        host: '127.0.0.1', port: Number(port),
+        path: '/open/system/notify?t=' + Math.floor(Date.now() / 1000),
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json;charset=UTF-8', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 15000,
+      }, (res) => {
+        let raw = '';
+        res.on('data', (c) => { raw += c; });
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(raw);
+            resolve(data.code === 200 ? true : { code: data.code, message: data.message || '' });
+          } catch { resolve({ code: res.statusCode, message: '非 JSON 响应' }); }
+        });
+      });
+      req.on('timeout', () => { req.destroy(new Error('请求超时')); });
+      req.on('error', (e) => { resolve({ code: 0, message: e.message }); });
+      req.write(body);
+      req.end();
+    });
+    if (result === true) {
+      _qlLog('📨 青龙通知已发（面板通知设置）');
+      return true;
+    }
+    if (result && result.code === 401 && attempt === 0) {
+      token = qlPanelToken(true);
+      if (!token) {
+        _qlLog('⚠️ [通知] 面板接口返回 401 且重新生成 token 失败，尝试 sendNotify.js');
+        return false;
+      }
+      continue;
+    }
+    _qlLog('⚠️ [通知] 面板接口发送失败：' + (result ? 'code=' + result.code + '：' + (result.message || '') : '未知错误') + '，尝试 sendNotify.js');
+    return false;
+  }
+  return false;
+}
+
+function loadQinglongNotifier() {
+  // 仅影响本脚本进程，避免青龙通知模块追加随机句子。
+  process.env.HITOKOTO = 'false';
+  const pathMod = require('path');
+  const candidates = [
+    '/ql/data/scripts/sendNotify.js', '/ql/data/deps/sendNotify.js', '/ql/scripts/sendNotify.js',
+    pathMod.join(__dirname, 'sendNotify.js'), pathMod.join(__dirname, '..', 'sendNotify.js'),
+    pathMod.join(__dirname, '..', '..', 'sendNotify.js'), 'sendNotify',
+  ];
+  for (const filename of candidates) {
+    try {
+      const notifier = require(filename);
+      if (typeof notifier?.sendNotify === 'function') return notifier;
+    } catch {}
+  }
+  return null;
+}
+
+// results: runAccount 返回的 stats 数组（{account, login, claimed, amount}）；
+// 成功按登录成功计（登录成功但当天无红包可领也算成功）。没账号时 results 为空，标题为“轻客：未执行”。
+async function qlNotifyQingke(results = [], totalAmount = 0, note = '') {
+  try {
+    const ok = results.filter((t) => t.login).length;
+    const fail = results.length - ok;
+    const title = results.length ? '轻客：' + ok + '成功/' + fail + '失败' : '轻客：未执行';
+    const lines = ['轻客红包自动领取', '', '总结：' + ok + ' 成功 / ' + fail + ' 失败，合计 ' + Number(totalAmount || 0).toFixed(2) + ' 元'];
+    results.forEach((t) => {
+      lines.push((t.account || '未知账号') + '：' + (t.login ? '登录成功' : '登录失败') + ' ' + (t.claimed || 0) + ' 个，' + Number(t.amount || 0).toFixed(2) + ' 元');
+    });
+    if (note) lines.push(note);
+    const tail = _qlLogTail.slice(-30);
+    if (tail.length) lines.push('', '📋 日志尾部（最近30行）:', ...tail);
+    let content = lines.join('\n');
+    if (content.length > 1800) content = content.slice(0, 1800) + '\n……（内容已截断，完整日志见青龙运行日志）';
+    if (await qlPanelNotify(title, content)) return;
+    const notifier = loadQinglongNotifier();
+    if (!notifier) { console.log('⚠️ 未找到可用的青龙sendNotify模块，账号汇总保留在运行日志'); return; }
+    try {
+      await notifier.sendNotify(title, content);
+      console.log('✅ 通知已提交青龙通知模块（sendNotify.js，仅环境变量渠道有效）');
+    } catch (e) { console.log('⚠️ 青龙通知调用失败: ' + (e.code || e.message || '通知模块异常')); }
+  } catch (e) {
+    // 通知本身绝不能拖垮主流程
+    try { console.log('⚠️ 通知发送异常（已忽略）: ' + (e.message || e)); } catch {}
+  }
 }
 
 const nowMs = () => Date.now();
@@ -431,10 +574,12 @@ async function main() {
   const accounts = parseAccounts();
   if (!accounts.length) {
     log('未配置账号，请设置 QINGKE_ACCOUNTS（每行 手机号#密码，支持多行或 & 分隔）');
+    await qlNotifyQingke([], 0, '未配置 QINGKE_ACCOUNTS（每行 手机号#密码，支持多行或 & 分隔）');
     process.exit(1);
   }
 
   const lines = [];
+  const statsList = [];
   let totalAmount = 0;
   for (let i = 0; i < accounts.length; i++) {
     const acc = createAccount(accounts[i].phone, accounts[i].password, cfg.deviceId);
@@ -446,6 +591,7 @@ async function main() {
       st = { account: maskPhone(acc.phone), login: false, claimed: 0, amount: 0 };
     }
     totalAmount += st.amount;
+    statsList.push(st);
     lines.push(`${st.account}：${st.login ? '登录成功' : '登录失败'} ${st.claimed} 个，${st.amount.toFixed(2)} 元`);
     if (i < accounts.length - 1) await randSleep(3000, 6000);
   }
@@ -453,14 +599,7 @@ async function main() {
   const summary = `轻客红包 | ${lines.join('；')}；合计 ${totalAmount.toFixed(2)} 元`;
   log(summary);
 
-  try {
-    const notify = require('./sendNotify');
-    if (notify && typeof notify.sendNotify === 'function') {
-      await notify.sendNotify('轻客红包领取结果', summary);
-    }
-  } catch (e) {
-    // 未配置推送时忽略
-  }
+  await qlNotifyQingke(statsList, totalAmount, '');
 }
 
 if (require.main === module) {
