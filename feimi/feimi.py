@@ -1,3 +1,4 @@
+# cron: 0 */6 * * *
 # feimi.py - 飞米阅读 (青龙版)
 # 账号密码/OpenID 一律走青龙环境变量, 不写进仓库:
 #   FEIMI_USERNAME / FEIMI_PASSWORD / FEIMI_OPENIDS (一行一个, 也可用 & 或逗号分隔)
