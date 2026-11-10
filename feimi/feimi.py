@@ -3,9 +3,10 @@
 #   FEIMI_USERNAME / FEIMI_PASSWORD / FEIMI_OPENIDS (一行一个, 也可用 & 或逗号分隔)
 #   FEIMI_PLATFORM_URL (可选, 默认 http://951.bllnl.fun:18080)
 # 自检: python3 feimi.py --check (只验链路, 不计金币)
-# 用自家 yyb-go (默认 http://120.77.1.90:8000):
-#   方式 A - token 直跑 (已可用): 青龙环境变量 FEIMI_TOKEN 填飞米 token, 不用 951 平台, 不用登录
-#   方式 B - yyb-go 取码换 token (待补): 需 FEIMI_APPID + FEIMI_LOGIN_URL, 拿到后只填变量即可, 不用改代码
+# 飞米是 H5 站 (feimiyin.cn, 后端 hwz.tslu.cn), 不是小程序 wx.login, 自家 yyb-go 取码不适用:
+#   登录是浏览器里拿 6 位码, 微信扫码填码验证, token 存 localStorage userToken
+#   方式 A - token 直跑 (唯一已验证的路): 青龙环境变量 FEIMI_TOKEN 填飞米 token, 不用 951 平台, 不用登录
+#   方式 C - 951 平台 (原版): 填 FEIMI_USERNAME / FEIMI_PASSWORD / FEIMI_OPENIDS, 平台代取 token
 #   过检测: 没配 951 平台账号时自动跳过真机推送, 只走静态阅读
 # 微信交流  https://qr61.cn/oHjkWn/qoABO89# 所涉及到的 账号安全、数据泄露、设备故障、软件违规封禁、财产损失等问题及法律风险，与脚本无关！均由使用者自行承担。
 
@@ -53,9 +54,6 @@ REAL_FIRST_N = 3
 PLATFORM_URL = os.environ.get("FEIMI_PLATFORM_URL", "http://951.bllnl.fun:18080")
 USERNAME = os.environ.get("FEIMI_USERNAME", "")
 PASSWORD = os.environ.get("FEIMI_PASSWORD", "")
-YYB_SERVER = os.environ.get("YYB_SERVER", "http://120.77.1.90:8000").rstrip("/")
-FEIMI_APPID = os.environ.get("FEIMI_APPID", "")
-FEIMI_LOGIN_URL = os.environ.get("FEIMI_LOGIN_URL", "")
 FEIMI_TOKEN = os.environ.get("FEIMI_TOKEN", "")
 
       
@@ -297,36 +295,11 @@ def human_sleep(seconds, label=""):
 
 
                                                                        
-def _yyb_get_code(openid):
-    """自家 yyb-go 取小程序 code: POST {YYB_SERVER}/wxapp/getCode {ref, app_id}。"""
-    import urllib.request as _u
-    body = json.dumps({"ref": openid, "app_id": FEIMI_APPID}).encode("utf-8")
-    req = _u.Request(YYB_SERVER + "/wxapp/getCode", data=body,
-                     headers={"Content-Type": "application/json"})
-    with _u.urlopen(req, timeout=20) as r:
-        j = json.loads(r.read().decode("utf-8"))
-    code = ((j.get("data") or {}).get("result") or {}).get("code") or (j.get("data") or {}).get("code") or ""
-    if not code or code == "0":
-        raise RuntimeError("yyb-go 取 code 失败: %s" % json.dumps(j, ensure_ascii=False)[:200])
-    return code
-
-
 def full_login(openid):
-    """取 token: 优先 FEIMI_TOKEN 直跑, 其次自家 yyb-go 取码换 token, 最后才走 951 平台。"""
+    """取 token: 优先 FEIMI_TOKEN 直跑, 否则走 951 平台 (原版)。飞米 H5 登录不用 yyb-go 取码。"""
     if FEIMI_TOKEN:
         log.info("token 直跑: 使用 FEIMI_TOKEN, 跳过登录")
         return FEIMI_TOKEN, "FEIMI_TOKEN", "token直跑"
-    if FEIMI_APPID or FEIMI_LOGIN_URL:
-        if not FEIMI_APPID or not FEIMI_LOGIN_URL:
-            raise RuntimeError("自家 yyb-go 换 token 缺配置: FEIMI_APPID 和 FEIMI_LOGIN_URL 须同时填")
-        code = _yyb_get_code(openid)
-        r = requests.post(FEIMI_LOGIN_URL, json={"code": code}, headers=dict(BASE_HEADERS), timeout=20)
-        d = r.json()
-        token = (d.get("data") or {}).get("token") or d.get("token") or ""
-        if not token:
-            raise RuntimeError("飞米登录换 token 失败: %s" % json.dumps(d, ensure_ascii=False)[:200])
-        log.info("自家 yyb-go 取码换 token 成功")
-        return token, "yyb-go", {"id": (d.get("data") or {}).get("id"), "invite_id": (d.get("data") or {}).get("invite_id"), "gold": (d.get("data") or {}).get("gold"), "dayreads": (d.get("data") or {}).get("dayreads")}
     token, name, extra = get_token(
         "飞米", PLATFORM_URL, USERNAME, PASSWORD, openid)
     log.info("平台取 token 成功: %s", name)
