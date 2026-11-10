@@ -36,8 +36,8 @@ app_id=33 / xcx_version / activity type 201811 均为该小程序固定应用常
 //     POST /wxapp/getCode，body {ref, app_id}，appid wx839691cce7c102bb 由调用方传入；
 //     没配 YYB 才回落 POST /wx/code；
 // (3) 删了 login() 里打印 Cookie 的那行 console.log，不把 Cookie 打进日志。
-// 多账号注意：YYB 只认 YYB_SERVER 第一行 @ 后面的 ref，pddgy_gzh 里的
-// openid 在 YYB 模式下只作计数和缓存 key，见 README。
+// 多账号注意：2026-11-10 起 YYB 按账号取 code，pddgy_gzh 里每行
+// OpenID 就是该账号的 YYB ref；YYB_SERVER 只提供服务器地址，见 README。
 // ---------------------------------------------------------------------------
 
 const { Env } = require("./tools/env");

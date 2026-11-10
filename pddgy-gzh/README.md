@@ -7,9 +7,9 @@
 - 定时：`28 9,13 * * *`（脚本头，每天 09:28、13:28）
 - 环境变量：`pddgy_gzh`（注意不是 `pddgy`；账号，多账号按青龙常用 `&` 或换行分隔；单个账号内以 `#` 分隔，首位为 openid/账号标识，后面可加备注）
 - 取码（二选一，YYB 优先）：
-  - **优先走 yyb-go**：填 `YYB_SERVER` 即可（格式“地址@账号ref”，多行多账号，取第一行；与习酒、红色火箭、众安、顺丰速运、可口可乐共用同一个，已配好的不用重填）。`wcs.js` 的 `getCode` 会 POST `{server}/wxapp/getCode`，请求体 `{ref, app_id}`，`app_id` 为拼多多果园公众号版小程序的 `wx839691cce7c102bb`；成功响应形如 `{"code":0,"msg":"success","data":{"openid":"...","result":{"code":"<微信code>","errMsg":"login:ok"}}}`（协议照抄 `hongse-huojian/hshj.js` 的 `yybPost` 与 `shunfeng-suyun/sfsy.py` 的 `_get_wx_code`）。YYB 的 ref 取自 `YYB_SERVER` 第一行的 `@` 后面，不是 `pddgy_gzh` 里的 openid；多 YYB 账号时统一用第一行。取码失败时该账号记为失败并继续下一个，不抛错中断。`YYB_SERVER` 已配时不再走 WeChatCodeServer。
+  - **优先走 yyb-go**：填 `YYB_SERVER` 即可（格式“地址@账号ref”，多行多账号；与习酒、红色火箭、众安、顺丰速运、可口可乐共用同一个，已配好的不用重填）。`wcs.js` 的 `getCode` 会 POST `{server}/wxapp/getCode`，请求体 `{ref, app_id}`，`app_id` 为拼多多果园公众号版小程序的 `wx839691cce7c102bb`；成功响应形如 `{"code":0,"msg":"success","data":{"openid":"...","result":{"code":"<微信code>","errMsg":"login:ok"}}}`（协议照抄 `hongse-huojian/hshj.js` 的 `yybPost` 与 `shunfeng-suyun/sfsy.py` 的 `_get_wx_code`）。2026-11-10 起 YYB 的 ref 按账号取：`pddgy_gzh` 里每行 OpenID 就是该账号的 ref，`YYB_SERVER` 只提供服务器地址；没传 openid 时才回落第一行。取码失败时该账号记为失败并继续下一个，不抛错中断。`YYB_SERVER` 已配时不再走 WeChatCodeServer。
   - **回落走 WeChatCodeServer**：没配 `YYB_SERVER` 时才走，需另填 `wx_server_url` + `wx_auth`（自建或有授权的取码服务地址与密钥）。不要把密钥和账号写进仓库。
-- `pddgy_gzh` 填法（YYB 模式）：填 `YYB_SERVER` 里 `@` 后面的 OpenID，一个账号填一个；或只填 `1` 作占位计数也行——取码都用 `YYB_SERVER` 第一行，`pddgy_gzh` 里的值在 YYB 模式下只作计数和 Cookie 缓存的 key，不再决定取谁的 code。多微信号想各跑各的，目前这套 YYB 适配做不到，统一走第一行。
+- `pddgy_gzh` 填法（YYB 模式）：填 `YYB_SERVER` 里 `@` 后面的 OpenID，一个账号填一个，多账号按 `&` 或换行分隔；2026-11-10 起取码按该账号自己的 OpenID 取，多微信号各跑各的。只填 `1` 作占位计数时回落到 `YYB_SERVER` 第一行。
 - 取码后的流程（未改）：拿到 code 后 GET `https://mobile.yangkeduo.com/garden_index_lz_0.html?...&code=${code}&state=BASE` 换 Cookie（`PDDAccessToken` / `pdd_user_id` / `pdd_user_uin`），再调首页接口拿 `tubetoken` 和水滴数，签到调 `/manor/common/apply/activity`，附带浇水调 `/manor/water/cost`。code 必须是真实有效的微信 code，假 code 换不到真 Cookie，所以通取码链路不等于能跑通签到。首次使用需先在微信里打开“多多果园”小程序完成注册、授权或绑定手机号，否则 yyb-go 也拿不到有效 code。
 
 - 入仓改动（相对原脚本，只改三处，签到/浇水业务逻辑未改）：

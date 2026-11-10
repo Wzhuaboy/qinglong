@@ -8,8 +8,10 @@ const axios = require("axios");
 // hongse-huojian/hshj.js 的 yybPost / getSingleCode 和
 // shunfeng-suyun/sfsy.py 的 _get_wx_code）。
 // 没配 YYB_SERVER 时回落到原来的 WeChatCodeServer 路径。
-// 注意：YYB 的 ref 来自 YYB_SERVER 第一行的 @ 后面，不是传进来的
-// openid（那是 WeChatCodeServer 的 wcsid）；多 YYB 账号时统一用第一行。
+// 2026-11-10 修正：YYB 的 ref 不再只认 YYB_SERVER 第一行。
+// getCode(openid) 传进来的 openid 就是该账号的 YYB ref（pddgy_gzh 里
+// 填的 OpenID），按账号取 code；没传 openid 时才回落到第一行。
+// 旧写法导致多账号时所有账号都拿第一行旧号取 code，新号永远用不上。
 // ---------------------------------------------------------------------------
 function parseYybServer() {
     const raw = String(process.env.YYB_SERVER || '');
@@ -45,12 +47,13 @@ class WeChatCodeServer {
     // 为假时的分支一致）；失败原因打在日志里。
     getCodeYyb(openid) {
         const yyb = parseYybServer();
-        console.log('等待获取code（YYB）:');
+        const ref = String(openid || '').trim() || yyb.ref;
+        console.log('等待获取code（YYB），ref=' + ref.slice(0, 8) + '...:');
         const headers = { 'Content-Type': 'application/json' };
         const token = String(process.env.YYB_API_KEY || '').trim()
             || String(process.env.YYB_PROTOCOL_TOKEN || '').trim();
         if (token) headers.Authorization = 'Bearer ' + token;
-        return axios.post(yyb.server + '/wxapp/getCode', { ref: yyb.ref, app_id: this.appid }, {
+        return axios.post(yyb.server + '/wxapp/getCode', { ref, app_id: this.appid }, {
             headers,
             timeout: 30 * 1000
         }).then(res => {
