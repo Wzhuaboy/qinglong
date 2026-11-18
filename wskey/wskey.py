@@ -12,6 +12,7 @@ import random
 import re
 import socket
 import struct
+import subprocess
 import sys
 import time
 import uuid
@@ -36,9 +37,11 @@ os.environ['no_proxy'] = '*'  # 禁用代理
 requests.packages.urllib3.disable_warnings()  # 抑制错误
 try:
     from notify import send  # 导入青龙消息通知模块
+    HAS_NOTIFY = True
 except Exception as err:
     logger.debug(str(err))  # 调试日志输出
     logger.info("无推送文件")  # 标准日志输出
+    HAS_NOTIFY = False
 
 ver = 40904  # 版本号
 # 2026-11-12 补丁：青龙 2.18+ 不再写 auth.json，改走应用授权
@@ -164,15 +167,101 @@ def genParams():
     return params
 
 
+# 2026-11-18 补丁：通知走面板通知设置（企业微信机器人），转换成功也推送
+# 背景：notify.py 只读 QYWX_KEY 等环境变量，读不到面板数据库里的通知配置，
+# 所以只调它时面板里配的企业微信收不到。主通道改为面板本地接口
+# PUT /open/system/notify（带系统 token，见 /ql/data/config/token.json），
+# 该接口由面板后端按数据库里的通知配置发出去；失败再试 notify.py，
+# 再试直连企业微信机器人（WECOM_WEBHOOK 或 QYWX_KEY）。通知发不出去绝不影响主流程。
+def _ql_panel_token(force_regen=False):
+    if not force_regen:
+        for _path in (
+            os.environ.get("QL_NOTIFY_TOKEN_FILE", "") or "",
+            "/ql/data/config/token.json",
+            "/ql/config/token.json",
+        ):
+            if not _path:
+                continue
+            try:
+                with open(_path, encoding="utf-8") as _f:
+                    _data = json.load(_f)
+                _tok = str(_data.get("value") or "").strip()
+                _exp = int(_data.get("expiration") or 0)
+                if _tok and _exp > time.time() + 30:
+                    return _tok
+            except Exception:
+                continue
+    for _cmd in (["node", "/ql/static/build/token.js"], ["node", "/ql/build/token.js"]):
+        try:
+            _r = subprocess.run(_cmd, capture_output=True, text=True, timeout=30)
+            if _r.returncode == 0:
+                _parts = (_r.stdout or "").strip().split()
+                if _parts:
+                    return _parts[-1]
+        except Exception:
+            continue
+    return ""
+
+
+def _ql_panel_notify(title, content):
+    """调面板接口发通知。返回 (True, '') 或 (False, 原因)。"""
+    port = (os.environ.get("QL_PORT", "") or "5700").strip() or "5700"
+    token = _ql_panel_token()
+    if not token:
+        return False, "读不到青龙系统 token"
+    body = json.dumps({"title": title, "content": content}, ensure_ascii=False).encode("utf-8")
+    for attempt in range(2):
+        try:
+            res = requests.put(
+                "http://127.0.0.1:%s/open/system/notify?t=%d" % (port, int(time.time())),
+                data=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json;charset=UTF-8"},
+                timeout=15,
+            )
+            data = res.json()
+            if data.get("code") == 200:
+                return True, ""
+            if data.get("code") == 401 and attempt == 0:
+                token = _ql_panel_token(force_regen=True)
+                if not token:
+                    return False, "面板接口返回 401 且重新生成 token 失败"
+                continue
+            return False, "面板通知接口返回 code=%s" % data.get("code")
+        except Exception as exc:
+            return False, "连接青龙面板接口失败：%s" % exc
+    return False, "面板通知接口调用失败"
+
+
 def ql_send(text):
     if "WSKEY_SEND" in os.environ and os.environ["WSKEY_SEND"] == 'disable':
         return True
-    else:
+    # 1) 面板通知接口（走面板通知设置里的企业微信机器人）
+    try:
+        ok, reason = _ql_panel_notify('WSKEY转换', text)
+    except Exception as exc:
+        ok, reason = False, "面板通知调用异常：%s" % exc
+    if ok:
+        return True
+    logger.debug("面板通知失败：%s，尝试 notify.py" % reason)
+    # 2) 青龙 notify（仅环境变量配置的渠道有效）
+    if HAS_NOTIFY:
         try:
             send('WSKEY转换', text)  # 消息发送
+            return True
         except Exception as err:
             logger.debug(str(err))  # Debug日志输出
-            logger.info("通知发送失败")  # 标准日志输出
+    # 3) 直连企业微信机器人（WECOM_WEBHOOK 或 QYWX_KEY，填 key 或完整 webhook 地址都行）
+    try:
+        url = os.environ.get("WECOM_WEBHOOK") or os.environ.get("QYWX_KEY") or ""
+        if url:
+            if not url.startswith("http"):
+                url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + url
+            requests.post(url, timeout=10, json={"msgtype": "text", "text": {"content": "WSKEY转换\n" + text}})
+            return True
+    except Exception as err:
+        logger.debug(str(err))  # Debug日志输出
+    logger.info("通知发送失败")  # 标准日志输出
+    return False
 
 
 # 登录青龙 返回值 token
@@ -699,6 +788,7 @@ if __name__ == '__main__':  # Python主函数执行入口
                         # logger.info("wskey转pt_key成功", nt_key)  # 标准日志输出 [未启用]
                         logger.info("wskey转换成功")  # 标准日志输出
                         ql_update(eid, return_ws)  # 函数 ql_update 参数 eid JD_COOKIE
+                        ql_send(f"账号: {wspin} wskey转换成功，JD_COOKIE 已更新")
                     else:
                         if WSKEY_AUTO_DISABLE:
                             logger.info(str(wspin) + "账号失效")  # 标准日志输出
@@ -718,6 +808,7 @@ if __name__ == '__main__':  # Python主函数执行入口
                 if return_ws:  # 判断 (return_ws[0]) 类型: [Bool]
                     logger.info("wskey转换成功\n")  # 标准日志输出
                     ql_insert(return_ws)  # 调用方法 [ql_insert]
+                    ql_send(f"账号: {wspin} wskey转换成功，新 JD_COOKIE 已写入")
             logger.info(f"暂停{sleepTime}秒\n")  # 标准日志输出
             time.sleep(sleepTime)  # 脚本休眠
         else:
